@@ -15,8 +15,8 @@ import (
 )
 
 type servers struct {
-	ht *httptest.Server
-	ns *nsserver.Server
+	ht      *httptest.Server
+	ns      *nsserver.Server
 	clients []*nats.Conn
 }
 
@@ -44,7 +44,6 @@ func (ts *servers) client() (*nats.Conn, error) {
 	return nc, nil
 }
 
-
 func setRequestMethod(m *nats.Msg, method string) {
 	m.Header = http.Header{}
 	m.Header.Set(RequestMethod, strings.ToUpper(method))
@@ -58,9 +57,9 @@ func TestHttpMethod(t *testing.T) {
 
 	nc, err := ts.client()
 	require.NoError(t, err)
-	nc.Subscribe(">", func (m *nats.Msg) {
-		Handle(m, ts.ht.Config.Handler)
-	})
+
+	a := HttpServiceAdapter{BaseURL: "http://localhost", HttpHandler: ts.ht.Config.Handler}
+	nc.Subscribe(">", a.NatsHandler())
 
 	cn, err := ts.client()
 	require.NoError(t, err)
@@ -92,9 +91,8 @@ func TestHttpError(t *testing.T) {
 
 	nc, err := ts.client()
 	require.NoError(t, err)
-	nc.Subscribe(">", func (m *nats.Msg) {
-		Handle(m, ts.ht.Config.Handler)
-	})
+	a := HttpServiceAdapter{BaseURL: "http://localhost", HttpHandler: ts.ht.Config.Handler}
+	nc.Subscribe(">", a.NatsHandler())
 
 	cn, err := ts.client()
 	require.NoError(t, err)
@@ -102,8 +100,25 @@ func TestHttpError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, m.Header)
 	require.Equal(t, "404", m.Header.Get("Status"))
+	require.Equal(t, "Not Found", m.Header.Get("Description"))
 }
 
+func TestHttpQuery(t *testing.T) {
+	ts := NewServers(func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query()["name"]
+		w.Write([]byte(fmt.Sprintf("Hello %s", name)))
+	})
+	defer ts.Stop()
 
-
-
+	nc, err := ts.client()
+	require.NoError(t, err)
+	a := HttpServiceAdapter{BaseURL: "http://localhost", HttpHandler: ts.ht.Config.Handler}
+	nc.Subscribe(">", a.NatsHandler())
+	cn, err := ts.client()
+	require.NoError(t, err)
+	m, err := cn.Request("hello?name=Alberto", nil, time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, m.Header)
+	require.Equal(t, "200", m.Header.Get("Status"))
+	require.Equal(t, []byte("Hello Alberto"), m.Data)
+}

@@ -14,29 +14,41 @@ import (
 
 const RequestMethod = "RequestMethod"
 
-func Handle(m *nats.Msg, server http.Handler) {
+type HttpServiceAdapter struct {
+	HttpHandler http.Handler // The http handler to dispatch to
+	BaseURL     string       // The base URL to associate all paths with `http://server:port`
+}
+
+// NatsHandler returns nats.MsgHandler that will dispatch to the HTTP handler
+func (a *HttpServiceAdapter) NatsHandler() nats.MsgHandler {
+	return func(m *nats.Msg) {
+		a.handle(m)
+	}
+}
+
+func (a *HttpServiceAdapter) handle(m *nats.Msg) {
 	res := &natsResponseWriter{}
 	res.m.Subject = m.Reply
-	req, err := toRequest(m)
+	req, err := a.toRequest(m)
 	if err != nil {
-		res.m.Header = asHeader(err)
+		res.m.Header = a.asHeader(err)
 	} else {
-		server.ServeHTTP(res, req)
+		a.HttpHandler.ServeHTTP(res, req)
 	}
 	m.RespondMsg(&res.m)
 }
 
-func asHeader(err error) http.Header {
+func (a *HttpServiceAdapter) asHeader(err error) http.Header {
 	h := http.Header{}
 	h.Add("Status", "400")
 	h.Add("Description", err.Error())
 	return h
 }
 
-func toRequest(m *nats.Msg) (*http.Request, error) {
+func (a *HttpServiceAdapter) toRequest(m *nats.Msg) (*http.Request, error) {
 	r := new(http.Request)
 	p := strings.Replace(m.Subject, ".", "/", -1)
-	reqURI := fmt.Sprintf("http://localhost:8080/%s", p)
+	reqURI := fmt.Sprintf("%s/%s", a.BaseURL, p)
 	u, err := url.Parse(reqURI)
 	if err != nil {
 		return r, err
@@ -71,14 +83,32 @@ func (r *natsResponseWriter) Header() http.Header {
 	return r.m.Header
 }
 
+func (r *natsResponseWriter) getStatus() string {
+	status := ""
+	if r.m.Header != nil {
+		status = r.m.Header.Get("Status")
+	}
+	return status
+}
+
 func (r *natsResponseWriter) Write(data []byte) (int, error) {
+	if r.getStatus() == "" {
+		r.WriteHeader(http.StatusOK)
+	}
 	r.m.Data = append(r.m.Data, data...)
 	return len(data), nil
 }
 
-func (r *natsResponseWriter) WriteHeader(statusCode int) {
+func (r *natsResponseWriter) WriteHeader(code int) {
 	if r.m.Header == nil {
 		r.m.Header = http.Header{}
 	}
-	r.m.Header.Add("Status", strconv.Itoa(statusCode))
+	r.m.Header.Add("Status", strconv.Itoa(code))
+	if code != http.StatusOK {
+		description := http.StatusText(code)
+		if description == "" {
+			description = fmt.Sprintf("%d - Unknown Status", code)
+		}
+		r.m.Header.Add("Description", description)
+	}
 }
