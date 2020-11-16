@@ -11,6 +11,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const HostPort = "127.0.0.1:8080"
+
 func main() {
 	_, err := NewServer()
 	if err != nil {
@@ -26,10 +28,10 @@ type Server struct {
 
 func NewServer() (*Server, error) {
 	s := &Server{}
-	if err := s.startNATS(); err != nil {
+	if err := s.startHTTP(); err != nil {
 		return nil, err
 	}
-	if err := s.startHTTP(); err != nil {
+	if err := s.startNATS(); err != nil {
 		return nil, err
 	}
 
@@ -42,13 +44,10 @@ func (s *Server) startNATS() error {
 	if err != nil {
 		return err
 	}
-	s.nc.Subscribe(">", s.natsHandler)
-	return err
-}
 
-func (s *Server) natsHandler(m *nats.Msg) {
-	res := nats2http.Handle(m, s.httpSrv.Handler)
-	m.RespondMsg(res)
+	a := nats2http.HttpServiceAdapter{BaseURL: fmt.Sprintf("http://%s", HostPort), HttpHandler: s.httpSrv.Handler}
+	s.nc.Subscribe(">", a.NatsHandler())
+	return err
 }
 
 func (s *Server) startHTTP() error {
@@ -56,7 +55,7 @@ func (s *Server) startHTTP() error {
 	if err != nil {
 		return err
 	}
-	listen, err := net.Listen("tcp", "127.0.0.1:8080")
+	listen, err := net.Listen("tcp", HostPort)
 	if err != nil {
 		return err
 	}

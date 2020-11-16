@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -17,6 +18,7 @@ const RequestMethod = "RequestMethod"
 type HttpServiceAdapter struct {
 	HttpHandler http.Handler // The http handler to dispatch to
 	BaseURL     string       // The base URL to associate all paths with `http://server:port`
+	Logger      natsserver.Logger
 }
 
 // NatsHandler returns nats.MsgHandler that will dispatch to the HTTP handler
@@ -31,11 +33,20 @@ func (a *HttpServiceAdapter) handle(m *nats.Msg) {
 	res.m.Subject = m.Reply
 	req, err := a.toRequest(m)
 	if err != nil {
+		if a.Logger != nil {
+			a.Logger.Errorf("error converting nats msg [%s] to http request: %v", m.Subject, err)
+		}
 		res.m.Header = a.asHeader(err)
 	} else {
 		a.HttpHandler.ServeHTTP(res, req)
 	}
-	m.RespondMsg(&res.m)
+	if res.m.Subject != "" {
+		if a.Logger != nil {
+			a.Logger.Debugf("responding to request [%s]: [%s]", m.Subject, m.Header.Get("Status"))
+		}
+		m.RespondMsg(&res.m)
+	}
+
 }
 
 func (a *HttpServiceAdapter) asHeader(err error) http.Header {
